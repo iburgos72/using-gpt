@@ -1,0 +1,21 @@
+version: '3'
+services:
+  go-server:
+    build:
+      context: .
+      dockerfile: DockerfileGo
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/go/src/app
+
+  react-frontend:
+    build:
+      context: ./assets
+      dockerfile: DockerfileReact
+    ports:
+      - "3000:3000"
+    depends_on:
+      - go-server
+    volumes:
+      - ./assets:/usr/src/app

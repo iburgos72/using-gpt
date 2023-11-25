@@ -1,0 +1,9 @@
+# air.toml
+root = "."  # Set the root directory for watching file changes
+
+[[watcher]]
+dirs = ["."]
+
+[[runner]]
+binary = "go"
+args = ["run", "main.go"]  # Specify the entry point for your Go application
