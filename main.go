@@ -1,60 +1,114 @@
 package main
 
 import (
-	"context"
-	"fmt"
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 )
 
+type ChatGTPRequest struct {
+	Messages []ChatGTPMessages `json:"messages"`
+}
+
+type ChatGTPMessages struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ChatGTPResponse struct {
+	Choices []ChatGTPResponseChoice `json:"choices"`
+}
+
+type ChatGTPResponseChoice struct {
+	Message ChatGTPResponseMessage `json:"message"`
+}
+
+type ChatGTPResponseMessage struct {
+	Index        int    `json:"index"`
+	Role         string `json:"role"`
+	Content      string `json:"content"`
+	FinishReason string `json:"finish_reason"`
+}
+
+func loadEnv() {
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
+}
+
 func main() {
+	loadEnv()
+
 	r := mux.NewRouter()
 
-	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Hello, World!")
-	}).Methods("GET")
+	r.HandleFunc("/chat", chatHandler).Methods("POST")
 
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: r,
+	http.Handle("/", r)
+	http.ListenAndServe(":8080", nil)
+}
+
+func chatHandler(w http.ResponseWriter, r *http.Request) {
+	var req ChatGTPRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON request", http.StatusBadRequest)
+		return
 	}
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Error: %v\n", err)
-		}
-	}()
-
-	// Set up signal handling for graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-
-	for {
-		select {
-		case <-c:
-			// Handle signals
-			fmt.Println("Received signal. Shutting down gracefully...")
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := srv.Shutdown(ctx); err != nil {
-				fmt.Printf("Error during server shutdown: %v\n", err)
-			}
-
-			// Simulate a delay for code updates (replace with actual update logic)
-			time.Sleep(2 * time.Second)
-
-			fmt.Println("Restarting server...")
-			// Start the server again
-			go func() {
-				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					fmt.Printf("Error: %v\n", err)
-				}
-			}()
-		}
+	resp, err := chatGPTAPI(req)
+	if err != nil {
+		http.Error(w, "Error from GPT API", http.StatusInternalServerError)
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func chatGPTAPI(request ChatGTPRequest) (ChatGTPResponse, error) {
+	apiKey := os.Getenv("OPEN_API_KEY")
+	url := "https://api.openai.com/v1/chat/completions"
+	bodyData := map[string]interface{}{
+		"messages": request.Messages,
+		"model":    "gpt-3.5-turbo",
+	}
+
+	bodyBytes, err := json.Marshal(bodyData)
+	if err != nil {
+		return ChatGTPResponse{}, err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return ChatGTPResponse{}, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ChatGTPResponse{}, err
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return ChatGTPResponse{}, err
+	}
+
+	var respData ChatGTPResponse
+	if err := json.Unmarshal(body, &respData); err != nil {
+		return ChatGTPResponse{}, err
+	}
+
+	return respData, nil
 }
